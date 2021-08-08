@@ -363,6 +363,11 @@ PERL		= perl
 PYTHON		= python
 CHECK		= sparse
 
+ifeq ($(CONFIG_CRYPTO_FIPS),)
+    READELF        = $(CROSS_COMPILE)readelf
+    export READELF
+endif
+
 # Use the wrapper for the compiler.  This wrapper scans for new
 # warnings and causes the build to stop upon encountering them.
 CC		= $(srctree)/scripts/gcc-wrapper.py $(REAL_CC)
@@ -851,6 +856,17 @@ include scripts/Makefile.ubsan
 KBUILD_CPPFLAGS += $(ARCH_CPPFLAGS) $(KCPPFLAGS)
 KBUILD_AFLAGS   += $(ARCH_AFLAGS)   $(KAFLAGS)
 KBUILD_CFLAGS   += $(ARCH_CFLAGS)   $(KCFLAGS)
+
+ifeq ($(CONFIG_SENSORS_FINGERPRINT), y)
+ifneq ($(CONFIG_SEC_FACTORY), true)
+ifneq ($(SEC_BUILD_CONF_USE_FINGERPRINT_TZ), false)
+	export KBUILD_FP_SENSOR_CFLAGS := -DENABLE_SENSORS_FPRINT_SECURE
+endif
+endif
+endif
+ifneq ($(SEC_BUILD_CONF_USE_IRIS_TZ), false)
+	export KBUILD_IRIS_CFLAGS := -DENABLE_IRIS_SECURE_I2C_GPIO
+endif
 
 # Use --build-id when available.
 LDFLAGS_BUILD_ID = $(patsubst -Wl$(comma)%,%,\

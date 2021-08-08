@@ -47,16 +47,16 @@ typedef unsigned long mm_segment_t;
 struct thread_info {
 	unsigned long		flags;		/* low level flags */
 	mm_segment_t		addr_limit;	/* address limit */
-#ifndef CONFIG_THREAD_INFO_IN_TASK
+//#ifndef CONFIG_THREAD_INFO_IN_TASK
 	struct task_struct	*task;		/* main task structure */
-#endif
+//#endif
 #ifdef CONFIG_ARM64_SW_TTBR0_PAN
 	u64			ttbr0;		/* saved TTBR0_EL1 */
 #endif
 	int			preempt_count;	/* 0 => preemptable, <0 => bug */
-#ifndef CONFIG_THREAD_INFO_IN_TASK
+//#ifndef CONFIG_THREAD_INFO_IN_TASK
 	int			cpu;		/* cpu */
-#endif
+//#endif
 };
 
 #ifdef CONFIG_THREAD_INFO_IN_TASK

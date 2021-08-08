@@ -185,7 +185,19 @@ SECTIONS
 		*(.altinstr_replacement)
 	}
 	.rela : ALIGN(8) {
+		__reloc_start = .;
 		*(.rela .rela*)
+		__reloc_end = .;
+	}
+	.dynsym : ALIGN(8) {
+		__dynsym_start = .;
+		*(.dynsym)
+	}
+	.dynstr : {
+		*(.dynstr)
+	}
+	.hash : {
+		*(.hash)
 	}
 
 	__rela_offset	= ABSOLUTE(ADDR(.rela) - KIMAGE_VADDR);

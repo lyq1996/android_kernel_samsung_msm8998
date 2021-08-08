@@ -1422,6 +1422,8 @@ enum mdp_color_space {
  */
 #define MDP_CSC_ITU_R_2020	(MDP_CSC_ITU_R_709 + 1)
 #define MDP_CSC_ITU_R_2020_FR	(MDP_CSC_ITU_R_2020 + 1)
+#define MDP_CSC_ITU_R_P3 (MDP_CSC_ITU_R_2020_FR + 1)
+#define MDP_CSC_ITU_R_P3_FR (MDP_CSC_ITU_R_P3 + 1)
 
 enum {
 	mdp_igc_v1_7 = 1,

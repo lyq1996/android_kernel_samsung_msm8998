@@ -24,12 +24,14 @@
 #include <linux/magic.h>
 #include <linux/bootmem.h>
 #include <linux/task_work.h>
+#include <linux/fslog.h>
 #include "pnode.h"
 #include "internal.h"
 
 /* Maximum number of mounts in a mount namespace */
 unsigned int sysctl_mount_max __read_mostly = 100000;
 
+static unsigned int sys_umount_trace_status;
 static unsigned int m_hash_mask __read_mostly;
 static unsigned int m_hash_shift __read_mostly;
 static unsigned int mp_hash_mask __read_mostly;
@@ -87,6 +89,47 @@ static inline struct hlist_head *m_hash(struct vfsmount *mnt, struct dentry *den
 	tmp += ((unsigned long)dentry / L1_CACHE_BYTES);
 	tmp = tmp + (tmp >> m_hash_shift);
 	return &mount_hashtable[tmp & m_hash_mask];
+}
+
+static inline int sys_umount_trace_start(struct mount *mnt, int flags)
+{
+	struct super_block *sb = mnt->mnt.mnt_sb;
+	int mnt_flags = mnt->mnt.mnt_flags;
+	if ((sb->s_magic == SDFAT_SUPER_MAGIC) ||
+			(sb->s_magic == MSDOS_SUPER_MAGIC)) {
+		struct block_device *bdev = sb->s_bdev;
+		dev_t bd_dev = bdev ? bdev->bd_dev : 0;
+
+		ST_LOG("[SYSCALL](%s[%d:%d]): "
+			"enter umount(mf:0x%x, f:0x%x, %s)\n",
+			sb->s_id, MAJOR(bd_dev), MINOR(bd_dev), mnt_flags,
+			flags, mnt->mnt_mountpoint->d_name.name);
+		return 1;
+	}
+	return 0;
+}
+
+#define UMOUNT_END_ADD_TASK		(0x00)
+#define UMOUNT_END_REMAIN_NS		(0x01)
+#define UMOUNT_END_REMAIN_MNT_COUNT	(0x02)
+#define UMOUNT_END_ADD_DELAYED_WORK	(0x03)
+
+static inline void sys_umount_trace_set_status(unsigned int status)
+{
+	sys_umount_trace_status = status;
+}
+
+static inline void sys_umount_trace_end(struct mount *mnt, unsigned int stlog)
+{
+	struct super_block *sb = mnt->mnt.mnt_sb;
+	if (stlog) {
+		struct block_device *bdev = sb->s_bdev;
+		dev_t bd_dev = bdev ? bdev->bd_dev : 0;
+
+		ST_LOG("[SYSCALL](%s[%d:%d]): exit umount(%d)\n",
+			sb->s_id, MAJOR(bd_dev), MINOR(bd_dev),
+			sys_umount_trace_status);
+	}
 }
 
 static inline struct hlist_head *mp_hash(struct dentry *dentry)
@@ -1163,6 +1206,7 @@ static void mntput_no_expire(struct mount *mnt)
 		 */
 		mnt_add_count(mnt, -1);
 		rcu_read_unlock();
+		sys_umount_trace_set_status(UMOUNT_END_REMAIN_NS);
 		return;
 	}
 	lock_mount_hash();
@@ -1175,6 +1219,7 @@ static void mntput_no_expire(struct mount *mnt)
 	if (mnt_get_count(mnt)) {
 		rcu_read_unlock();
 		unlock_mount_hash();
+		sys_umount_trace_set_status(UMOUNT_END_REMAIN_MNT_COUNT);
 		return;
 	}
 	if (unlikely(mnt->mnt.mnt_flags & MNT_DOOMED)) {
@@ -1199,11 +1244,15 @@ static void mntput_no_expire(struct mount *mnt)
 		struct task_struct *task = current;
 		if (likely(!(task->flags & PF_KTHREAD))) {
 			init_task_work(&mnt->mnt_rcu, __cleanup_mnt);
-			if (!task_work_add(task, &mnt->mnt_rcu, true))
+			if (!task_work_add(task, &mnt->mnt_rcu, true)) {
+				sys_umount_trace_set_status(UMOUNT_END_ADD_TASK);
 				return;
+			}
 		}
-		if (llist_add(&mnt->mnt_llist, &delayed_mntput_list))
+		if (llist_add(&mnt->mnt_llist, &delayed_mntput_list)) {
 			schedule_delayed_work(&delayed_mntput_work, 1);
+			sys_umount_trace_set_status(UMOUNT_END_ADD_DELAYED_WORK);
+		}
 		return;
 	}
 	cleanup_mnt(mnt);
@@ -1681,7 +1730,7 @@ SYSCALL_DEFINE2(umount, char __user *, name, int, flags)
 	struct path path;
 	struct mount *mnt;
 	int retval;
-	int lookup_flags = 0;
+	int lookup_flags = 0, stlog = 0;
 
 	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
 		return -EINVAL;
@@ -1707,11 +1756,13 @@ SYSCALL_DEFINE2(umount, char __user *, name, int, flags)
 	if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))
 		goto dput_and_out;
 
+	stlog = sys_umount_trace_start(mnt, flags);
 	retval = do_umount(mnt, flags);
 dput_and_out:
 	/* we mustn't call path_put() as that would clear mnt_expiry_mark */
 	dput(path.dentry);
 	mntput_no_expire(mnt);
+	sys_umount_trace_end(mnt, stlog);
 out:
 	return retval;
 }
@@ -2521,10 +2572,6 @@ static int do_new_mount(struct path *path, const char *fstype, int flags,
 		return -ENODEV;
 
 	if (user_ns != &init_user_ns) {
-		if (!(type->fs_flags & FS_USERNS_MOUNT)) {
-			put_filesystem(type);
-			return -EPERM;
-		}
 		/* Only in special cases allow devices from mounts
 		 * created outside the initial user namespace.
 		 */

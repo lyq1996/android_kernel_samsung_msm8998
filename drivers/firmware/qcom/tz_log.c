@@ -23,6 +23,7 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/of.h>
+#include <linux/qcom/sec_debug.h>
 
 #include <soc/qcom/scm.h>
 #include <soc/qcom/qseecomi.h>
@@ -783,6 +784,11 @@ static ssize_t tzdbgfs_read(struct file *file, char __user *buf,
 {
 	int len = 0;
 	int *tz_id =  file->private_data;
+
+	if (sec_debug_is_rp_enabled() && !sec_debug_is_secure_dump())   {
+		pr_err("%s: read failed, rp_enabled:[%d], secure_dump:[%d]\n", __func__, sec_debug_is_rp_enabled(), sec_debug_is_secure_dump());
+		return 0;
+	}
 
 	if (*tz_id == TZDBG_BOOT || *tz_id == TZDBG_RESET ||
 		*tz_id == TZDBG_INTERRUPT || *tz_id == TZDBG_GENERAL ||

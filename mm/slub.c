@@ -1271,9 +1271,16 @@ unsigned long kmem_cache_flags(unsigned long object_size,
 	 * Enable debugging if selected on the kernel commandline.
 	 */
 	if (slub_debug && (!slub_debug_slabs || (name &&
-		!strncmp(slub_debug_slabs, name, strlen(slub_debug_slabs)))))
+		!strncmp(slub_debug_slabs, name, strlen(slub_debug_slabs))))) {
 		flags |= slub_debug;
 
+		if (name && 
+			(!strncmp(name, "zspage", strlen("zspage")) ||
+			!strncmp(name, "zs_handle", strlen("zs_handle")) ||
+			!strncmp(name, "zswap_entry", strlen("zswap_entry")) ||
+			!strncmp(name, "avtab_node", strlen("avtab_node"))))
+			flags &= ~SLAB_STORE_USER;
+	}
 	return flags;
 }
 #else /* !CONFIG_SLUB_DEBUG */
@@ -1589,7 +1596,7 @@ static void __free_slab(struct kmem_cache *s, struct page *page)
 	page_mapcount_reset(page);
 	if (current->reclaim_state)
 		current->reclaim_state->reclaimed_slab += pages;
-	kasan_alloc_pages(page, order);
+
 	__free_kmem_pages(page, order);
 }
 

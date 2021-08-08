@@ -70,6 +70,10 @@ static void cipher_crypt_unaligned(void (*fn)(struct crypto_tfm *, u8 *,
 	u8 buffer[size + alignmask];
 	u8 *tmp = (u8 *)ALIGN((unsigned long)buffer, alignmask + 1);
 
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err())) 
+		return;
+#endif
 	memcpy(tmp, src, size);
 	fn(tfm, tmp, tmp);
 	memcpy(dst, tmp, size);
@@ -81,6 +85,10 @@ static void cipher_encrypt_unaligned(struct crypto_tfm *tfm,
 	unsigned long alignmask = crypto_tfm_alg_alignmask(tfm);
 	struct cipher_alg *cipher = &tfm->__crt_alg->cra_cipher;
 
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err())) 
+		return;
+#endif
 	if (unlikely(((unsigned long)dst | (unsigned long)src) & alignmask)) {
 		cipher_crypt_unaligned(cipher->cia_encrypt, tfm, dst, src);
 		return;
@@ -95,6 +103,10 @@ static void cipher_decrypt_unaligned(struct crypto_tfm *tfm,
 	unsigned long alignmask = crypto_tfm_alg_alignmask(tfm);
 	struct cipher_alg *cipher = &tfm->__crt_alg->cra_cipher;
 
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err())) 
+		return;
+#endif
 	if (unlikely(((unsigned long)dst | (unsigned long)src) & alignmask)) {
 		cipher_crypt_unaligned(cipher->cia_decrypt, tfm, dst, src);
 		return;

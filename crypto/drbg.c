@@ -100,6 +100,9 @@
 #include <crypto/drbg.h>
 #include <linux/kernel.h>
 
+#ifdef CONFIG_CRYPTO_FIPS
+#include "internal.h" //For FIPS_FUNC_TEST macros
+#endif
 /***************************************************************
  * Backend cipher definitions available to DRBG
  ***************************************************************/
@@ -250,9 +253,18 @@ static bool drbg_fips_continuous_test(struct drbg_state *drbg,
 		/* return false due to priming, i.e. another round is needed */
 		return false;
 	}
+#if FIPS_FUNC_TEST == 94
+	printk(KERN_ERR "FIPS : drbg.c:drbg_fips_continuous_test Intentionally failing drbg_fips_continuous_test!!!\n");
+	memcpy(drbg->prev, buf, drbg_blocklen(drbg));
+#endif
 	ret = memcmp(drbg->prev, buf, drbg_blocklen(drbg));
-	if (!ret)
-		panic("DRBG continuous self test failed\n");
+    if (ret == 0 ) {
+    printk(KERN_ERR "FIPS : drbg.c:drbg_fips_continuous_test failed !!!\n");
+    set_in_fips_err();
+        if (in_fips_err())
+            printk(KERN_ERR "FIPS : drbg.c:drbg_fips_continuous_test FIPS in Error!!!\n");
+        return false;
+    }
 	memcpy(drbg->prev, buf, drbg_blocklen(drbg));
 	/* the test shall pass when the two compared values are not equal */
 	return ret != 0;
@@ -583,6 +595,12 @@ static int drbg_ctr_generate(struct drbg_state *drbg,
 	int ret = 0;
 	struct drbg_string data;
 
+#ifdef CONFIG_CRYPTO_FIPS
+    if (unlikely(in_fips_err())) {
+            printk(KERN_ERR "FIPS : drbg.c:drbg_ctr_generate FIPS in Error!!!\n");
+            return -EACCES;
+    }
+#endif
 	/* 10.2.1.5.2 step 2 */
 	if (addtl && !list_empty(addtl)) {
 		ret = drbg_ctr_update(drbg, addtl, 2);
@@ -604,6 +622,13 @@ static int drbg_ctr_generate(struct drbg_state *drbg,
 		outlen = (drbg_blocklen(drbg) < (buflen - len)) ?
 			  drbg_blocklen(drbg) : (buflen - len);
 		if (!drbg_fips_continuous_test(drbg, drbg->scratchpad)) {
+#ifdef CONFIG_CRYPTO_FIPS
+            if (unlikely(in_fips_err())) {
+                printk(KERN_ERR "FIPS : drbg.c:drbg_ctr_generate FIPS in Error!!!\n");
+                len = -EACCES;
+                goto out;
+            }
+#endif
 			/* 10.2.1.5.2 step 6 */
 			crypto_inc(drbg->V, drbg_blocklen(drbg));
 			continue;
@@ -716,6 +741,12 @@ static int drbg_hmac_generate(struct drbg_state *drbg,
 	struct drbg_string data;
 	LIST_HEAD(datalist);
 
+#ifdef CONFIG_CRYPTO_FIPS
+    if (unlikely(in_fips_err())) {
+            printk(KERN_ERR "FIPS : drbg.c:drbg_hmac_generate FIPS in Error!!!\n");
+            return -EACCES;
+    }
+#endif
 	/* 10.1.2.5 step 2 */
 	if (addtl && !list_empty(addtl)) {
 		ret = drbg_hmac_update(drbg, addtl, 1);
@@ -733,8 +764,15 @@ static int drbg_hmac_generate(struct drbg_state *drbg,
 			return ret;
 		outlen = (drbg_blocklen(drbg) < (buflen - len)) ?
 			  drbg_blocklen(drbg) : (buflen - len);
-		if (!drbg_fips_continuous_test(drbg, drbg->V))
+		if (!drbg_fips_continuous_test(drbg, drbg->V)) {
+#ifdef CONFIG_CRYPTO_FIPS
+            if (unlikely(in_fips_err())) {
+                    printk(KERN_ERR "FIPS : drbg.c:drbg_hmac_generate FIPS in Error!!!\n");
+                    return -EACCES;
+            }
+#endif
 			continue;
+		}
 
 		/* 10.1.2.5 step 4.2 */
 		memcpy(buf + len, drbg->V, outlen);
@@ -948,6 +986,12 @@ static int drbg_hash_hashgen(struct drbg_state *drbg,
 	struct drbg_string data;
 	LIST_HEAD(datalist);
 
+#ifdef CONFIG_CRYPTO_FIPS
+    if (unlikely(in_fips_err())) {
+            printk(KERN_ERR "FIPS : drbg.c:drbg_hash_hashgen FIPS in Error!!!\n");
+            return -EACCES;
+    }
+#endif
 	/* 10.1.1.4 step hashgen 2 */
 	memcpy(src, drbg->V, drbg_statelen(drbg));
 
@@ -964,6 +1008,13 @@ static int drbg_hash_hashgen(struct drbg_state *drbg,
 		outlen = (drbg_blocklen(drbg) < (buflen - len)) ?
 			  drbg_blocklen(drbg) : (buflen - len);
 		if (!drbg_fips_continuous_test(drbg, dst)) {
+#ifdef CONFIG_CRYPTO_FIPS
+	        if (unlikely(in_fips_err())) {
+	                printk(KERN_ERR "FIPS : drbg.c:drbg_hmac_generate FIPS in Error!!!\n");
+	                len = -EACCES;
+	                goto out;
+	        }
+#endif
 			crypto_inc(src, drbg_statelen(drbg));
 			continue;
 		}

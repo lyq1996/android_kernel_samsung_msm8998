@@ -89,11 +89,42 @@
 #include <asm/sections.h>
 #include <asm/cacheflush.h>
 #include <soc/qcom/boot_stats.h>
+#ifdef CONFIG_SEC_BSP
+#include <linux/sec_bsp.h>
+#endif
 static int kernel_init(void *);
 
 extern void init_IRQ(void);
 extern void fork_init(void);
 extern void radix_tree_init(void);
+
+#ifdef CONFIG_DEFERRED_INITCALLS
+extern initcall_t __deferred_initcall_start[], __deferred_initcall_end[];
+
+/* call deferred init routines */
+static void __ref do_deferred_initcalls(struct work_struct *work)
+{
+	initcall_t *call;
+	static bool already_run;
+
+	if (already_run) {
+		pr_warn("%s() has already run\n", __func__);
+		return;
+	}
+
+	already_run = true;
+
+	pr_err("Running %s()\n", __func__);
+
+	for (call = __deferred_initcall_start;
+			call < __deferred_initcall_end; call++)
+		do_one_initcall(*call);
+
+	free_initmem();
+}
+
+static DECLARE_WORK(deferred_initcall_work, do_deferred_initcalls);
+#endif
 
 /*
  * Debug helper: via this flag we know that we are in 'early bootup code'
@@ -121,6 +152,7 @@ void (*__initdata late_time_init)(void);
 char __initdata boot_command_line[COMMAND_LINE_SIZE];
 /* Untouched saved command line (eg. for /proc) */
 char *saved_command_line;
+char *erased_command_line;
 /* Command line for parameter parsing */
 static char *static_command_line;
 /* Command line for per-initcall parameter parsing */
@@ -147,6 +179,8 @@ EXPORT_SYMBOL_GPL(static_key_initialized);
  */
 unsigned int reset_devices;
 EXPORT_SYMBOL(reset_devices);
+
+int ddr_start_type = 0;
 
 static int __init set_reset_devices(char *str)
 {
@@ -231,6 +265,100 @@ static int __init loglevel(char *str)
 }
 
 early_param("loglevel", loglevel);
+
+#ifdef CONFIG_SEC_BSP
+unsigned int is_boot_recovery;
+unsigned int is_boot_lpm;
+EXPORT_SYMBOL(is_boot_recovery);
+
+#ifdef CONFIG_SEC_DEBUG_PWDT
+static unsigned int __is_verifiedboot_state;
+#endif
+
+static int __init boot_recovery(char *str)
+{
+        int temp = 0;
+
+        if (get_option(&str, &temp)) {
+                is_boot_recovery = temp;
+		pr_info("%s, is_boot_recovery[%d]\n",
+				__func__, is_boot_recovery);
+                return 0;
+        }
+
+        return -EINVAL;
+}
+
+early_param("androidboot.boot_recovery", boot_recovery);
+
+unsigned int __is_boot_recovery(void)
+{
+	return is_boot_recovery;
+}
+EXPORT_SYMBOL(__is_boot_recovery);
+
+static int lpm_check(char *str)
+{
+	if (strncmp(str, "charger", 7) == 0)
+		is_boot_lpm = 1;
+	else
+		is_boot_lpm = 0;
+
+	return is_boot_lpm;
+}
+early_param("androidboot.mode", lpm_check);
+
+unsigned int __is_boot_lpm(void)
+{
+	return is_boot_lpm;
+}
+EXPORT_SYMBOL(__is_boot_lpm);
+#endif
+
+#ifdef CONFIG_SEC_DEBUG_PWDT
+static int  verifiedboot_state_param(char *str)
+{
+	static const char unlocked[] = "orange";
+
+	if (!str)
+		return -EINVAL;
+
+	if (strncmp(str, unlocked, sizeof(unlocked)) == 0)
+		__is_verifiedboot_state = 1;
+	else
+		__is_verifiedboot_state = 0;
+
+	return __is_verifiedboot_state;
+}
+early_param("androidboot.verifiedbootstate", verifiedboot_state_param);
+
+unsigned int is_verifiedboot_state(void)
+{
+	return __is_verifiedboot_state;
+}
+EXPORT_SYMBOL(is_verifiedboot_state);
+#endif
+
+#ifdef CONFIG_RTC_AUTO_PWRON_PARAM
+unsigned int sapa_param_time;
+EXPORT_SYMBOL(sapa_param_time);
+
+static int __init read_sapa_param(char *str)
+{
+	int temp = 0;
+
+	if (get_option(&str, &temp)) {
+		sapa_param_time = (unsigned int)temp;
+		pr_info("sapa: %s param_time:%u\n",
+			__func__, sapa_param_time);
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+early_param("sapa", read_sapa_param);
+#endif
 
 /* Change NUL term back to "=", to make "param" the whole string. */
 static int __init repair_env_string(char *param, char *val,
@@ -363,10 +491,13 @@ static void __init setup_command_line(char *command_line)
 {
 	saved_command_line =
 		memblock_virt_alloc(strlen(boot_command_line) + 1, 0);
+	erased_command_line =
+		memblock_virt_alloc(strlen(boot_command_line) + 1, 0);
 	initcall_command_line =
 		memblock_virt_alloc(strlen(boot_command_line) + 1, 0);
 	static_command_line = memblock_virt_alloc(strlen(command_line) + 1, 0);
 	strcpy(saved_command_line, boot_command_line);
+	strcpy(erased_command_line, boot_command_line);
 	strcpy(static_command_line, command_line);
 }
 
@@ -426,6 +557,13 @@ static int __init do_early_param(char *param, char *val,
 		}
 	}
 	/* We accept everything at this stage. */
+	if ((strncmp(param, "androidboot.ddr_start_type", 27) == 0)) {
+		pr_warn("val = %d\n",*val);
+		if ((strncmp(val, "1", 2) == 0))
+			ddr_start_type = 1;
+		else
+			ddr_start_type = 2;
+	}
 	return 0;
 }
 
@@ -497,7 +635,12 @@ asmlinkage __visible void __init start_kernel(void)
 {
 	char *command_line;
 	char *after_dashes;
-
+#ifdef CONFIG_SAMSUNG_PRODUCT_SHIP
+	char *erase_cmd_start, *erase_cmd_end;
+	char *erase_string[] = {"ap_serial=0x", "serialno=", "em.did="};
+	size_t len, value_len;
+	unsigned int i, j;
+#endif
 	/*
 	 * Need to run as early as possible, to initialize the
 	 * lockdep hash:
@@ -533,7 +676,29 @@ asmlinkage __visible void __init start_kernel(void)
 	build_all_zonelists(NULL, NULL);
 	page_alloc_init();
 
+#ifndef CONFIG_SAMSUNG_PRODUCT_SHIP
 	pr_notice("Kernel command line: %s\n", boot_command_line);
+#else
+	for (i = 0; i < ARRAY_SIZE(erase_string); i++) {
+		len = strlen(erase_string[i]);
+		erase_cmd_start = strstr(erased_command_line, erase_string[i]);
+		if (erase_cmd_start == NULL)
+			continue;
+
+		erase_cmd_end = strstr(erase_cmd_start, " ");
+
+		if ( (erase_cmd_end != NULL) && (erase_cmd_start != NULL)
+				&& (erase_cmd_end > erase_cmd_start) ) {
+			value_len = (size_t)(erase_cmd_end - erase_cmd_start) - len;
+
+			for (j = 0; j < value_len; j++) {
+				erase_cmd_start[len + j] = '0';
+			}
+		}
+	}
+	pr_notice("Kernel command line: %s\n", erased_command_line);
+#endif
+
 	parse_early_param();
 	after_dashes = parse_args("Booting kernel",
 				  static_command_line, __start___param,
@@ -759,6 +924,39 @@ static bool __init_or_module initcall_blacklisted(initcall_t fn)
 #endif
 __setup("initcall_blacklist=", initcall_blacklist);
 
+#ifdef CONFIG_SEC_BSP
+bool initcall_sec_debug = true;
+
+static int __init_or_module do_one_initcall_sec_debug(initcall_t fn)
+{
+	ktime_t calltime, delta, rettime;
+	unsigned long long duration;
+	int ret;
+	struct device_init_time_entry *entry;
+
+	calltime = ktime_get();
+	ret = fn();
+	rettime = ktime_get();
+	delta = ktime_sub(rettime, calltime);
+	duration = (unsigned long long) ktime_to_ns(delta) >> 10;
+	if (duration > DEVICE_INIT_TIME_100MS) {
+		entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+		if (!entry)
+			return -ENOMEM;
+		entry->buf = kasprintf(GFP_KERNEL, "%pf", fn);
+		if (!entry->buf) {
+			return -ENOMEM;
+		}
+		entry->duration = duration;
+		list_add(&entry->next, &device_init_time_list);
+		printk(KERN_DEBUG "initcall %pF returned %d after %lld usecs\n",
+			 fn, ret, duration);
+	}
+
+	return ret;
+}
+#endif
+
 static int __init_or_module do_one_initcall_debug(initcall_t fn)
 {
 	ktime_t calltime, delta, rettime;
@@ -788,6 +986,10 @@ int __init_or_module do_one_initcall(initcall_t fn)
 
 	if (initcall_debug)
 		ret = do_one_initcall_debug(fn);
+#ifdef CONFIG_SEC_BSP
+	else if (initcall_sec_debug)
+		ret = do_one_initcall_sec_debug(fn);
+#endif
 	else
 		ret = fn();
 
@@ -855,6 +1057,10 @@ static void __init do_initcall_level(int level)
 
 	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++)
 		do_one_initcall(*fn);
+	
+#ifdef CONFIG_SEC_BSP
+	sec_bootstat_add_initcall(initcall_level_names[level]);
+#endif
 }
 
 static void __init do_initcalls(void)
@@ -956,7 +1162,9 @@ static int __ref kernel_init(void *unused)
 	kernel_init_freeable();
 	/* need to finish all async __init code before freeing the memory */
 	async_synchronize_full();
+#ifndef CONFIG_DEFERRED_INITCALLS
 	free_initmem();
+#endif
 	mark_readonly();
 	system_state = SYSTEM_RUNNING;
 	numa_default_policy();
@@ -967,7 +1175,14 @@ static int __ref kernel_init(void *unused)
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
 		if (!ret)
+#ifdef CONFIG_DEFERRED_INITCALLS
+		{
+			schedule_work(&deferred_initcall_work);		
+#endif
 			return 0;
+#ifdef CONFIG_DEFERRED_INITCALLS
+		}
+#endif
 		pr_err("Failed to execute %s (error %d)\n",
 		       ramdisk_execute_command, ret);
 	}

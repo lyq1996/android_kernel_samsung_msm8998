@@ -45,6 +45,12 @@
 #include <asm/system_misc.h>
 #include <asm/esr.h>
 #include <asm/edac.h>
+#ifdef CONFIG_SEC_DEBUG
+#include <linux/qcom/sec_debug.h>
+#endif
+#ifdef CONFIG_SEC_DEBUG_SUMMARY
+#include <linux/qcom/sec_debug_summary.h>
+#endif
 
 #include <trace/events/exception.h>
 
@@ -115,6 +121,34 @@ static void dump_backtrace_entry(unsigned long where)
 	 */
 	print_ip_sym(where);
 }
+
+#ifdef CONFIG_USER_RESET_DEBUG
+void sec_debug_backtrace(void)
+{
+	static int once = 0;
+	struct stackframe frame;
+	int skip_callstack = 0;
+
+	if (!once++) {
+		frame.fp = (unsigned long)__builtin_frame_address(0);
+		frame.sp = current_stack_pointer;
+		frame.pc = (unsigned long)sec_debug_backtrace;
+
+		while (1) {
+			int ret;
+
+			ret = unwind_frame(current, &frame);
+			if (ret < 0)
+				break;
+
+			if (skip_callstack++ > 3) {
+				_sec_debug_store_backtrace(frame.pc);
+			}
+		}
+	}
+}
+EXPORT_SYMBOL(sec_debug_backtrace);
+#endif
 
 static void __dump_instr(const char *lvl, struct pt_regs *regs)
 {
@@ -271,6 +305,16 @@ static int __die(const char *str, int err, struct pt_regs *regs)
 		 end_of_stack(tsk));
 
 	if (!user_mode(regs) || in_interrupt()) {
+#ifdef CONFIG_SEC_DEBUG
+		if (THREAD_SIZE + (unsigned long)task_stack_page(tsk) - regs->sp
+			> THREAD_SIZE) {
+			dump_mem(KERN_EMERG, "Stack: ", regs->sp,
+					THREAD_SIZE/4 + regs->sp, 1);
+		} else {
+			dump_mem(KERN_EMERG, "Stack: ", regs->sp,
+					THREAD_SIZE + (unsigned long)task_stack_page(tsk), 1);
+		}
+#endif
 		dump_backtrace(regs, tsk);
 		dump_instr(KERN_EMERG, regs);
 	}
@@ -288,6 +332,9 @@ static unsigned long oops_begin(void)
 	unsigned long flags;
 
 	oops_enter();
+#ifdef CONFIG_SEC_DEBUG
+	secdbg_sched_msg("!!die!!");
+#endif
 
 	/* racy, but better than risking deadlock. */
 	raw_local_irq_save(flags);
@@ -342,6 +389,9 @@ void die(const char *str, struct pt_regs *regs, int err)
 	if (bug_type != BUG_TRAP_TYPE_NONE)
 		str = "Oops - BUG";
 
+#ifdef CONFIG_SEC_DEBUG_SUMMARY
+	sec_debug_save_die_info(str, regs);
+#endif
 	ret = __die(str, err, regs);
 
 	oops_end(flags, regs, ret);
@@ -559,6 +609,10 @@ asmlinkage void bad_mode(struct pt_regs *regs, int reason, unsigned int esr)
 {
 	console_verbose();
 
+#ifdef CONFIG_SEC_DEBUG
+	sec_debug_save_badmode_info(reason, handler[reason],
+			esr, esr_get_class_string(esr));
+#endif
 	pr_crit("Bad mode in %s handler detected, code 0x%08x -- %s\n",
 		handler[reason], esr, esr_get_class_string(esr));
 

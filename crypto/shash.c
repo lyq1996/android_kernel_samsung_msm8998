@@ -103,6 +103,10 @@ int crypto_shash_update(struct shash_desc *desc, const u8 *data,
 	struct shash_alg *shash = crypto_shash_alg(tfm);
 	unsigned long alignmask = crypto_shash_alignmask(tfm);
 
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err()))
+		return -EACCES;
+#endif
 	if ((unsigned long)data & alignmask)
 		return shash_update_unaligned(desc, data, len);
 
@@ -138,6 +142,10 @@ int crypto_shash_final(struct shash_desc *desc, u8 *out)
 	struct shash_alg *shash = crypto_shash_alg(tfm);
 	unsigned long alignmask = crypto_shash_alignmask(tfm);
 
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err()))
+		return -EACCES;
+#endif
 	if ((unsigned long)out & alignmask)
 		return shash_final_unaligned(desc, out);
 
@@ -159,6 +167,10 @@ int crypto_shash_finup(struct shash_desc *desc, const u8 *data,
 	struct shash_alg *shash = crypto_shash_alg(tfm);
 	unsigned long alignmask = crypto_shash_alignmask(tfm);
 
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err()))
+		return -EACCES;
+#endif
 	if (((unsigned long)data | (unsigned long)out) & alignmask)
 		return shash_finup_unaligned(desc, data, len, out);
 
@@ -180,6 +192,10 @@ int crypto_shash_digest(struct shash_desc *desc, const u8 *data,
 	struct shash_alg *shash = crypto_shash_alg(tfm);
 	unsigned long alignmask = crypto_shash_alignmask(tfm);
 
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err()))
+		return -EACCES;
+#endif
 	if (((unsigned long)data | (unsigned long)out) & alignmask)
 		return shash_digest_unaligned(desc, data, len, out);
 
@@ -212,6 +228,10 @@ static int shash_async_init(struct ahash_request *req)
 	struct crypto_shash **ctx = crypto_ahash_ctx(crypto_ahash_reqtfm(req));
 	struct shash_desc *desc = ahash_request_ctx(req);
 
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err()))
+		return -EACCES;
+#endif
 	desc->tfm = *ctx;
 	desc->flags = req->base.flags;
 
@@ -223,6 +243,10 @@ int shash_ahash_update(struct ahash_request *req, struct shash_desc *desc)
 	struct crypto_hash_walk walk;
 	int nbytes;
 
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err()))
+		return -EACCES;
+#endif
 	for (nbytes = crypto_hash_walk_first(req, &walk); nbytes > 0;
 	     nbytes = crypto_hash_walk_done(&walk, nbytes))
 		nbytes = crypto_shash_update(desc, walk.data, nbytes);
@@ -246,6 +270,10 @@ int shash_ahash_finup(struct ahash_request *req, struct shash_desc *desc)
 	struct crypto_hash_walk walk;
 	int nbytes;
 
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err()))
+		return -EACCES;
+#endif
 	nbytes = crypto_hash_walk_first(req, &walk);
 	if (!nbytes)
 		return crypto_shash_final(desc, req->result);
@@ -280,6 +308,10 @@ int shash_ahash_digest(struct ahash_request *req, struct shash_desc *desc)
 	unsigned int offset;
 	int err;
 
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err()))
+		return -EACCES;
+#endif
 	if (nbytes &&
 	    (sg = req->src, offset = sg->offset,
 	     nbytes < min(sg->length, ((unsigned int)(PAGE_SIZE)) - offset))) {
@@ -340,6 +372,10 @@ int crypto_init_shash_ops_async(struct crypto_tfm *tfm)
 	struct crypto_shash **ctx = crypto_tfm_ctx(tfm);
 	struct crypto_shash *shash;
 
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err()))
+		return -EACCES;
+#endif
 	if (!crypto_mod_get(calg))
 		return -EAGAIN;
 
@@ -616,6 +652,10 @@ int crypto_register_shash(struct shash_alg *alg)
 	struct crypto_alg *base = &alg->base;
 	int err;
 
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err()))
+		return -EACCES;
+#endif
 	err = shash_prepare_alg(alg);
 	if (err)
 		return err;
@@ -671,6 +711,10 @@ int shash_register_instance(struct crypto_template *tmpl,
 {
 	int err;
 
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err()))
+		return -EACCES;
+#endif
 	err = shash_prepare_alg(&inst->alg);
 	if (err)
 		return err;
@@ -698,6 +742,10 @@ int crypto_init_shash_spawn(struct crypto_shash_spawn *spawn,
 			    struct shash_alg *alg,
 			    struct crypto_instance *inst)
 {
+#ifdef CONFIG_CRYPTO_FIPS
+	if (unlikely(in_fips_err()))
+		return -EACCES;
+#endif
 	return crypto_init_spawn2(&spawn->base, &alg->base, inst,
 				  &crypto_shash_type);
 }
